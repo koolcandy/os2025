@@ -28,8 +28,13 @@ int main(int argc, char *argv[]) {
             moveDirection = argv[i + 1];
             i++;
         } else if (strcmp(argv[i], "--version") == 0) {
-            printf("Labyrinth Game - Version 1.0\n");
-            return 0;
+            if (argc > 2) {
+                printf("Error: --version does not take any arguments.\n");
+                return 1;
+            } else {
+                printf("Labyrinth Game - Version 1.0\n");
+                return 0;
+            }
         }
     }
     

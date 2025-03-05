@@ -22,3 +22,4 @@ bool isEmptySpace(Labyrinth *labyrinth, int row, int col);
 bool movePlayer(Labyrinth *labyrinth, char playerId, const char *direction);
 bool saveMap(Labyrinth *labyrinth, const char *filename);
 bool isConnected(Labyrinth *labyrinth);
+void printUsage();

@@ -3,38 +3,51 @@
 #include <string.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <getopt.h>
 #include <testkit.h>
 #include "labyrinth.h"
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        printUsage();
-        return 1;
-    }
-
     char *mapFile = NULL;
     char playerId = '\0';
     char *moveDirection = NULL;
     
-    // Parse command line arguments
-    for (int i = 1; i < argc; i++) {
-        if ((strcmp(argv[i], "--map") == 0 || strcmp(argv[i], "-m") == 0) && i + 1 < argc) {
-            mapFile = argv[i + 1];
-            i++;
-        } else if ((strcmp(argv[i], "--player") == 0 || strcmp(argv[i], "-p") == 0) && i + 1 < argc) {
-            playerId = argv[i + 1][0];
-            i++;
-        } else if (strcmp(argv[i], "--move") == 0 && i + 1 < argc) {
-            moveDirection = argv[i + 1];
-            i++;
-        } else if (strcmp(argv[i], "--version") == 0) {
-            if (argc > 2) {
-                printf("Error: --version does not take any arguments.\n");
+    static struct option long_options[] = {
+        {"map",     required_argument, 0, 'm'},
+        {"player",  required_argument, 0, 'p'},
+        {"move",    required_argument, 0, 'x'},
+        {"version", no_argument,       0, 'v'},
+        {0,         0,                 0,  0 }
+    };
+
+    char choice = 0;
+
+    // Parse command line arguments using getopt_long
+    while ((choice = getopt_long(argc, argv, "m:p:v", long_options, NULL)) != -1) {
+        switch (choice) {
+            case 'm':
+                mapFile = optarg;
+                break;
+            case 'p':
+                playerId = optarg[0];
+                break;
+            case 'x':
+                moveDirection = optarg;
+                break;
+            case 'v':
+                if (argc > 2) {
+                    printf("Error: --version option cannot be combined with other options.\n");
+                    return 1;
+                } else {
+                    printf("Labyrinth Game - Version 1.0\n");
+                    return 0;
+                }
+            case '?':
+                // getopt_long already printed an error message
+                printUsage();
                 return 1;
-            } else {
-                printf("Labyrinth Game - Version 1.0\n");
-                return 0;
-            }
+            default:
+                abort();
         }
     }
     

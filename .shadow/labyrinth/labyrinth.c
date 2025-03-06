@@ -20,12 +20,11 @@ int main(int argc, char *argv[]) {
         {0,         0,                 0,  0 }
     };
 
-    int option_index = 0;
-    int c;
+    char choice;
 
     // Parse command line arguments using getopt_long
-    while ((c = getopt_long(argc, argv, "m:p:v", long_options, &option_index)) != -1) {
-        switch (c) {
+    while ((choice = getopt_long(argc, argv, "m:p:v", long_options, NULL)) != -1) {
+        switch (choice) {
             case 'm':
                 mapFile = optarg;
                 break;

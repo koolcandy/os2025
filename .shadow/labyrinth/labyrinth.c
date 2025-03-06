@@ -36,8 +36,13 @@ int main(int argc, char *argv[]) {
                 moveDirection = optarg;
                 break;
             case 'v':
-                printf("Labyrinth Game - Version 1.0\n");
-                return 0;
+                if (argc > 2) {
+                    printf("Error: --version option cannot be combined with other options.\n");
+                    return 1;
+                } else {
+                    printf("Labyrinth Game - Version 1.0\n");
+                    return 0;
+                }
             case '?':
                 // getopt_long already printed an error message
                 printUsage();

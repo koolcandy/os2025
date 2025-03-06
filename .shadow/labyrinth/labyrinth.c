@@ -11,7 +11,6 @@ int main(int argc, char *argv[]) {
     char *mapFile = NULL;
     char playerId = '\0';
     char *moveDirection = NULL;
-    int showVersion = 0;
     
     static struct option long_options[] = {
         {"map",     required_argument, 0, 'm'},
@@ -67,7 +66,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // 剩余代码保持不变...
     // Find player position
     Position playerPos = findPlayer(&labyrinth, playerId);
     

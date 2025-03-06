@@ -32,7 +32,7 @@ int main(int argc, char *argv[]) {
             case 'p':
                 playerId = optarg[0];
                 break;
-            case 'M':
+            case 'x':
                 moveDirection = optarg;
                 break;
             case 'v':

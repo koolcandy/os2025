@@ -3,41 +3,51 @@
 #include <string.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <getopt.h>
 #include <testkit.h>
 #include "labyrinth.h"
 
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        printUsage();
-        return 1;
-    }
-
     char *mapFile = NULL;
     char playerId = '\0';
     char *moveDirection = NULL;
+    int showVersion = 0;
     
-    // Parse command line arguments
-    for (int i = 1; i < argc; i++) {
-        if ((strcmp(argv[i], "--map") == 0 || strcmp(argv[i], "-m") == 0) && i + 1 < argc) {
-            mapFile = argv[i + 1];
-            i++;
-        } else if ((strcmp(argv[i], "--player") == 0 || strcmp(argv[i], "-p") == 0) && i + 1 < argc) {
-            playerId = argv[i + 1][0];
-            i++;
-        } else if (strcmp(argv[i], "--move") == 0 && i + 1 < argc) {
-            moveDirection = argv[i + 1];
-            i++;
-        } else if (strcmp(argv[i], "--version") == 0) {
-            if (argc > 2) {
-                printf("Error: --version does not take any arguments.\n");
-                return 1;
-            } else {
+    static struct option long_options[] = {
+        {"map",     required_argument, 0, 'm'},
+        {"player",  required_argument, 0, 'p'},
+        {"move",    required_argument, 0, 'x'},
+        {"version", no_argument,       0, 'v'},
+        {0,         0,                 0,  0 }
+    };
+
+    int option_index = 0;
+    int c;
+
+    // Parse command line arguments using getopt_long
+    while ((c = getopt_long(argc, argv, "m:p:v", long_options, &option_index)) != -1) {
+        switch (c) {
+            case 'm':
+                mapFile = optarg;
+                break;
+            case 'p':
+                playerId = optarg[0];
+                break;
+            case 'M':
+                moveDirection = optarg;
+                break;
+            case 'v':
                 printf("Labyrinth Game - Version 1.0\n");
                 return 0;
-            }
+            case '?':
+                // getopt_long already printed an error message
+                printUsage();
+                return 1;
+            default:
+                abort();
         }
     }
-    
+
     // Check for required parameters
     if (!mapFile || !playerId) {
         printUsage();
@@ -57,6 +67,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
+    // 剩余代码保持不变...
     // Find player position
     Position playerPos = findPlayer(&labyrinth, playerId);
     

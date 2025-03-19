@@ -291,7 +291,7 @@ void print_process_tree(ProcessNode* node, bool show_pids, bool numeric_sort, in
     
     // Print current process name
     if (depth > 0) {
-        printf("(");
+        printf("[");
     }
     
     printf("%s", node->process.name);
@@ -335,7 +335,7 @@ void print_process_tree(ProcessNode* node, bool show_pids, bool numeric_sort, in
     
     // Close parenthesis
     if (depth > 0) {
-        printf(")");
+        printf("]");
     }
 }
 

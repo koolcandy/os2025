@@ -46,7 +46,7 @@ int main(int argc, char *argv[]) {
             show_pids = true;
         } else if (strcmp(argv[i], "--numeric-sort") == 0 || strcmp(argv[i], "-n") == 0) {
             numeric_sort = true;
-        } else if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
+        } else if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
             if (argc > 2) {
                 printf("Error: --version option cannot be combined with other options.\n");
                 return EXIT_FAILURE;

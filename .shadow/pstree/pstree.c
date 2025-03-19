@@ -283,7 +283,7 @@ ProcessNode* build_process_tree(Process* processes, int proc_count) {
     return root;
 }
 
-// Recursively print process tree with ASCII lines
+// Recursively print process tree with box-drawing characters
 void print_process_tree(ProcessNode* node, bool show_pids, bool numeric_sort, int depth) {
     if (node == NULL) {
         return;
@@ -316,14 +316,13 @@ void print_process_tree(ProcessNode* node, bool show_pids, bool numeric_sort, in
         }
     }
     
-    // Print indentation based on depth
-    for (int i = 0; i < depth; i++) {
-        printf(" |");
-    }
-    
     // Print process name
     if (depth > 0) {
-        printf(" +--");
+        // For non-root nodes, print appropriate indentation
+        for (int i = 0; i < depth - 1; i++) {
+            printf("        │");
+        }
+        printf("        ├─");
     }
     
     printf("%s", node->process.name);
@@ -333,6 +332,10 @@ void print_process_tree(ProcessNode* node, bool show_pids, bool numeric_sort, in
         printf("(%d)", node->process.pid);
     }
     
+    // If this node has children, add the horizontal line
+    if (node->children_count > 0) {
+        printf("─┬─");
+    }
     printf("\n");
     
     // Recursively print all children
@@ -340,9 +343,9 @@ void print_process_tree(ProcessNode* node, bool show_pids, bool numeric_sort, in
         print_process_tree(node->children[i], show_pids, numeric_sort, depth + 1);
     }
     
-    // Add a blank line after depth 0 (root) for readability
+    // Add a vertical line after the last child
     if (depth == 0 && node->children_count > 0) {
-        printf("\n");
+        printf("        │\n");
     }
 }
 

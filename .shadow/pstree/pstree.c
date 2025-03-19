@@ -34,42 +34,30 @@ void print_process_tree(ProcessNode* node, bool show_pids, bool numeric_sort, in
 void free_process_tree(ProcessNode* node);
 
 int main(int argc, char *argv[]) {
-    // Define long options
-    static struct option long_options[] = {
-        {"show-pids",    no_argument, 0, 's'},
-        {"numeric-sort", no_argument, 0, 'n'},
-        {"version",      no_argument, 0, 'v'},
-        {0,              0,           0,  0 }
-    };
 
     // Default options
     bool show_pids = false;
     bool numeric_sort = false;
     char choice = 0;
 
-    // Parse command line arguments using getopt_long
-    while ((choice = getopt_long(argc, argv, "snv", long_options, NULL)) != -1) {
-        switch (choice) {
-            case 's':
-                show_pids = true;
-                break;
-            case 'n':
-                numeric_sort = true;
-                break;
-            case 'v':
-                if (argc > 2) {
-                    printf("Error: --version option cannot be combined with other options.\n");
-                    return EXIT_FAILURE;
-                } else {
-                    printf("pstree - Version 1.0\n");
-                    return EXIT_SUCCESS;
-                }
-            case '?':
-                // getopt_long already printed an error message
-                printf("Usage: %s [--show-pids] [--numeric-sort] [--version]\n", argv[0]);
+    // Argument parsing
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--show-pids") == 0 || strcmp(argv[i], "-s") == 0) {
+            show_pids = true;
+        } else if (strcmp(argv[i], "--numeric-sort") == 0 || strcmp(argv[i], "-n") == 0) {
+            numeric_sort = true;
+        } else if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
+            if (argc > 2) {
+                printf("Error: --version option cannot be combined with other options.\n");
                 return EXIT_FAILURE;
-            default:
-                abort();
+            } else {
+                printf("pstree - Version 1.0\n");
+                return EXIT_SUCCESS;
+            }
+        } else {
+            printf("Unknown option: %s\n", argv[i]);
+            printf("Usage: %s [--show-pids|-s] [--numeric-sort|-n] [--version|-v]\n", argv[0]);
+            return EXIT_FAILURE;
         }
     }
 

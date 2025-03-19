@@ -283,25 +283,13 @@ ProcessNode* build_process_tree(Process* processes, int proc_count) {
     return root;
 }
 
-// Recursively print process tree as parenthesized format
+// Recursively print process tree with ASCII lines
 void print_process_tree(ProcessNode* node, bool show_pids, bool numeric_sort, int depth) {
     if (node == NULL) {
         return;
     }
     
-    // Print current process name
-    if (depth > 0) {
-        printf("[");
-    }
-    
-    printf("%s", node->process.name);
-    
-    // Show PID if requested
-    if (show_pids) {
-        printf("(%d)", node->process.pid);
-    }
-    
-    // Sort and print children
+    // Sort children if needed
     if (node->children_count > 0) {
         // Sort by PID if numeric sort requested
         if (numeric_sort) {
@@ -326,16 +314,35 @@ void print_process_tree(ProcessNode* node, bool show_pids, bool numeric_sort, in
                 }
             }
         }
-        
-        // Recursively print all children
-        for (int i = 0; i < node->children_count; i++) {
-            print_process_tree(node->children[i], show_pids, numeric_sort, depth + 1);
-        }
     }
     
-    // Close parenthesis
+    // Print indentation based on depth
+    for (int i = 0; i < depth; i++) {
+        printf(" |");
+    }
+    
+    // Print process name
     if (depth > 0) {
-        printf("]");
+        printf(" +--");
+    }
+    
+    printf("%s", node->process.name);
+    
+    // Show PID if requested
+    if (show_pids) {
+        printf("(%d)", node->process.pid);
+    }
+    
+    printf("\n");
+    
+    // Recursively print all children
+    for (int i = 0; i < node->children_count; i++) {
+        print_process_tree(node->children[i], show_pids, numeric_sort, depth + 1);
+    }
+    
+    // Add a blank line after depth 0 (root) for readability
+    if (depth == 0 && node->children_count > 0) {
+        printf("\n");
     }
 }
 

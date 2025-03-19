@@ -20,7 +20,7 @@ int main(int argc, char *argv[]) {
         {0,         0,                 0,  0 }
     };
 
-    char choice;
+    char choice = 0;
 
     // Parse command line arguments using getopt_long
     while ((choice = getopt_long(argc, argv, "m:p:v", long_options, NULL)) != -1) {
@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
                 abort();
         }
     }
-
+    
     // Check for required parameters
     if (!mapFile || !playerId) {
         printUsage();

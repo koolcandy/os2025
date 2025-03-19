@@ -42,7 +42,7 @@ int main(int argc, char *argv[]) {
 
     // Argument parsing
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--show-pids") == 0 || strcmp(argv[i], "-s") == 0) {
+        if (strcmp(argv[i], "--show-pids") == 0 || strcmp(argv[i], "-p") == 0) {
             show_pids = true;
         } else if (strcmp(argv[i], "--numeric-sort") == 0 || strcmp(argv[i], "-n") == 0) {
             numeric_sort = true;

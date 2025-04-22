@@ -9,7 +9,7 @@
 #include <ctype.h>
 #include <sys/types.h>
 
-#define MAX_PID_NUM 32768
+#define MAX_PID_NUM 4194304
 
 // Process structure
 typedef struct {
@@ -19,9 +19,9 @@ typedef struct {
 } Process;
 
 // Multi-branch tree node structure
-typedef struct {
+typedef struct ProcessNode {
     Process process;
-    ProcessNode **children;
+    struct ProcessNode **children;
     int children_count;
     int capacity;
 } ProcessNode;
@@ -38,7 +38,6 @@ int main(int argc, char *argv[]) {
     // Default options
     bool show_pids = false;
     bool numeric_sort = false;
-    char choice = 0;
 
     // Argument parsing
     for (int i = 1; i < argc; i++) {

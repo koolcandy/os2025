@@ -19,9 +19,9 @@ typedef struct {
 } Process;
 
 // Multi-branch tree node structure
-typedef struct ProcessNode { // Added struct tag
+typedef struct ProcessNode { // Moved definition up
     Process process;
-    struct ProcessNode **children; // Use struct tag for recursive definition
+    struct ProcessNode **children;
     int children_count;
     int capacity;
 } ProcessNode;
@@ -38,7 +38,6 @@ int main(int argc, char *argv[]) {
     // Default options
     bool show_pids = false;
     bool numeric_sort = false;
-    char choice = 0;
 
     // Argument parsing
     for (int i = 1; i < argc; i++) {

@@ -38,6 +38,7 @@ int main(int argc, char *argv[]) {
     // Default options
     bool show_pids = false;
     bool numeric_sort = false;
+    char choice = 0;
 
     // Argument parsing
     for (int i = 1; i < argc; i++) {

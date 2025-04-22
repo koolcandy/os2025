@@ -9,7 +9,7 @@
 #include <ctype.h>
 #include <sys/types.h>
 
-#define MAX_PID_NUM 327680
+#define MAX_PID_NUM 4194304
 
 // Process structure
 typedef struct {

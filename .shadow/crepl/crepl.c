@@ -612,37 +612,37 @@ int main() {
     // Initialize function registry
     init_function_registry();
 
-    while (1) {
-        // read prompt
-        printf("crepl> ");
-        fflush(stdout);
-        if (!fgets(line, sizeof(line), stdin)) {
-            break;
-        }
+    // while (1) {
+    //     // read prompt
+    //     printf("crepl> ");
+    //     fflush(stdout);
+    //     if (!fgets(line, sizeof(line), stdin)) {
+    //         break;
+    //     }
         
-        // Remove trailing newline
-        line[strcspn(line, "\n")] = 0;
+    //     // Remove trailing newline
+    //     line[strcspn(line, "\n")] = 0;
         
-        // Skip empty lines
-        if (strlen(line) == 0) continue;
+    //     // Skip empty lines
+    //     if (strlen(line) == 0) continue;
         
-        // Check if this is a function definition first
-        if (is_function_definition(line)) {
-            if (compile_and_load_function(line)) {
-                printf("Function defined.\n");
-            } else {
-                fprintf(stderr, "Failed to compile function.\n");
-            }
-        }
-        // If not a function definition, try to handle as an expression
-        else if (evaluate_expression(line, &result)) {
-            printf("%d\n", result);
-        }
-        // If both fail, report an error
-        else {
-            fprintf(stderr, "Failed to evaluate expression or define function.\n");
-        }
-    }
+    //     // Check if this is a function definition first
+    //     if (is_function_definition(line)) {
+    //         if (compile_and_load_function(line)) {
+    //             printf("Function defined.\n");
+    //         } else {
+    //             fprintf(stderr, "Failed to compile function.\n");
+    //         }
+    //     }
+    //     // If not a function definition, try to handle as an expression
+    //     else if (evaluate_expression(line, &result)) {
+    //         printf("%d\n", result);
+    //     }
+    //     // If both fail, report an error
+    //     else {
+    //         fprintf(stderr, "Failed to evaluate expression or define function.\n");
+    //     }
+    // }
     
     // Clean up before exit
     if (current_handle) {

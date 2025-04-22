@@ -19,9 +19,9 @@ typedef struct {
 } Process;
 
 // Multi-branch tree node structure
-typedef struct ProcessNode {
+typedef struct {
     Process process;
-    struct ProcessNode **children;
+    ProcessNode **children;
     int children_count;
     int capacity;
 } ProcessNode;

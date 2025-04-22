@@ -9,7 +9,7 @@
 #include <ctype.h>
 #include <sys/types.h>
 
-#define MAX_PID_NUM 32768
+#define MAX_PID_NUM 4194304 // Increased max PID value
 
 // Process structure
 typedef struct {
@@ -19,9 +19,9 @@ typedef struct {
 } Process;
 
 // Multi-branch tree node structure
-typedef struct ProcessNode {
+typedef struct ProcessNode { // Added struct tag
     Process process;
-    struct ProcessNode **children;
+    struct ProcessNode **children; // Use struct tag for recursive definition
     int children_count;
     int capacity;
 } ProcessNode;
@@ -214,11 +214,32 @@ ProcessNode* build_process_tree(Process* processes, int proc_count) {
     root->children_count = 0;
     
     // Create a map to keep track of nodes by PID for O(1) lookups
-    ProcessNode* node_map[MAX_PID_NUM] = {NULL};
-    node_map[root->process.pid] = root;
+    // Use calloc to initialize all pointers to NULL
+    ProcessNode** node_map = calloc(MAX_PID_NUM, sizeof(ProcessNode*));
+    if (!node_map) {
+        perror("Failed to allocate memory for node map");
+        // Clean up root node before exiting
+        free(root->children);
+        free(root);
+        exit(EXIT_FAILURE);
+    }
+    
+    // Add root to the map if its PID is within bounds
+    if (root->process.pid >= 0 && root->process.pid < MAX_PID_NUM) {
+        node_map[root->process.pid] = root;
+    } else {
+        fprintf(stderr, "Warning: Root PID %d is out of bounds [0, %d)\n", root->process.pid, MAX_PID_NUM);
+        // Handle this case appropriately, maybe exit or try to continue carefully
+    }
     
     // First pass: create all nodes
     for (int i = 0; i < proc_count; i++) {
+        // Check if PID is valid before using it as an index
+        if (processes[i].pid < 0 || processes[i].pid >= MAX_PID_NUM) {
+            fprintf(stderr, "Warning: Skipping process with out-of-bounds PID %d\n", processes[i].pid);
+            continue;
+        }
+
         if (processes[i].pid == root->process.pid) {
             continue; // Skip the root process
         }
@@ -239,11 +260,23 @@ ProcessNode* build_process_tree(Process* processes, int proc_count) {
         node->children_count = 0;
         node->capacity = 10;
         
+        // Add node to map only if PID is valid
         node_map[processes[i].pid] = node;
     }
     
     // Second pass: build the tree structure
     for (int i = 0; i < proc_count; i++) {
+        // Check if current process PID is valid
+        if (processes[i].pid < 0 || processes[i].pid >= MAX_PID_NUM) {
+            // Already warned in the first pass
+            continue;
+        }
+        // Check if parent PID is valid
+        if (processes[i].ppid < 0 || processes[i].ppid >= MAX_PID_NUM) {
+             fprintf(stderr, "Warning: Skipping process %d with out-of-bounds PPID %d\n", processes[i].pid, processes[i].ppid);
+             continue;
+        }
+
         if (processes[i].pid == root->process.pid) {
             continue; // Skip the root process
         }
@@ -265,7 +298,7 @@ ProcessNode* build_process_tree(Process* processes, int proc_count) {
             }
             parent->children[parent->children_count++] = child;
         } else if (child) {
-            // If parent not found, add to root
+            // If parent not found (or parent PID was invalid), add to root
             if (root->children_count == root->capacity) {
                 root->capacity *= 2;
                 ProcessNode** new_children = realloc(root->children, 
@@ -278,7 +311,11 @@ ProcessNode* build_process_tree(Process* processes, int proc_count) {
             }
             root->children[root->children_count++] = child;
         }
+        // If child is NULL (e.g., due to allocation failure or invalid PID), skip
     }
+
+    // Free the node map after building the tree
+    free(node_map);
     
     return root;
 }

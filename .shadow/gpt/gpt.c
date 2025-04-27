@@ -361,8 +361,7 @@ void gpt2_build_from_checkpoint(GPT2 *model, char* checkpoint_path) {
     FILE *model_file = fopen(checkpoint_path, "rb");
     if (model_file == NULL) { printf("Error opening model file\n"); exit(1); }
     int model_header[256];
-    // Use (void) to explicitly ignore return value
-    (void)fread(model_header, sizeof(int), 256, model_file);
+    fread(model_header, sizeof(int), 256, model_file);
     if (model_header[0] != 20240326) { printf("Bad magic model file"); exit(1); }
     if (model_header[1] != 1) { printf("Bad version in model file"); exit(1); }
 
@@ -401,8 +400,7 @@ void gpt2_build_from_checkpoint(GPT2 *model, char* checkpoint_path) {
 
     // read in all the parameters from file
     model->params_memory = malloc_and_point_parameters(&model->params, model->param_sizes);
-    // Use (void) to explicitly ignore return value
-    (void)fread(model->params_memory, sizeof(float), num_parameters, model_file);
+    fread(model->params_memory, sizeof(float), num_parameters, model_file);
     fclose(model_file);
 
     // other inits

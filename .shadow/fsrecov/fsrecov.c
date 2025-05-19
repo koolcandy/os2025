@@ -6,390 +6,282 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <stdbool.h>
+#include <ctype.h>
+#include <strings.h> // For strcasecmp
+#include <sys/wait.h> // For fork and wait
 #include "fat32.h"
 
 void *map_disk(const char *fname);
-void *cluster_to_sec(int n);
-void get_filename(struct fat32dent *dent, char *buf);
-u32 next_cluster(int n);
-struct fat32hdr *hdr;
-
-// Map to store cluster -> filename (only from root directory)
-#include <stdbool.h>
-#define MAX_CLUS 65536
-char *clus_to_name[MAX_CLUS];
 
 // BMP file header structure
 typedef struct {
-    char signature[2];  // Should be "BM"
-    u32 fileSize;
-    u32 reserved;
-    u32 dataOffset;
-    u32 headerSize;
-    u32 width;
-    u32 height;
-    u16 planes;
-    u16 bitsPerPixel;
-    u32 compression;
-    u32 imageSize;
-    // Rest of the header not needed for this task
+    uint16_t signature;        // "BM" (0x4D42)
+    uint32_t fileSize;         // File size in bytes
+    uint32_t reserved;         // Reserved
+    uint32_t dataOffset;       // Offset to bitmap data
 } __attribute__((packed)) BMPHeader;
 
-// Directory entry structure for long filenames
-struct fat32longent {
-    u8 LDIR_Ord;
-    u16 LDIR_Name1[5];
-    u8 LDIR_Attr;
-    u8 LDIR_Type;
-    u8 LDIR_Chksum;
-    u16 LDIR_Name2[6];
-    u16 LDIR_FstClusLO;
-    u16 LDIR_Name3[2];
+// BMP info header structure
+typedef struct {
+    uint32_t headerSize;       // Info header size
+    int32_t  width;            // Width of the image
+    int32_t  height;           // Height of the image
+    uint16_t planes;           // Number of color planes
+    uint16_t bitsPerPixel;     // Bits per pixel
+    uint32_t compression;      // Compression type
+    uint32_t imageSize;        // Image size in bytes
+    int32_t  xPixelsPerMeter;  // Horizontal resolution
+    int32_t  yPixelsPerMeter;  // Vertical resolution
+    uint32_t colorsUsed;       // Number of colors used
+    uint32_t colorsImportant;  // Number of important colors
+} __attribute__((packed)) BMPInfoHeader;
+
+// Long filename directory entry structure
+struct fat32_lfn_entry {
+    u8  LDIR_Ord;              // Order of entry in sequence
+    u16 LDIR_Name1[5];         // Characters 1-5 of LFN
+    u8  LDIR_Attr;             // Attributes - always 0x0F
+    u8  LDIR_Type;             // Type of entry - should be 0
+    u8  LDIR_Chksum;           // Checksum of short filename
+    u16 LDIR_Name2[6];         // Characters 6-11 of LFN
+    u16 LDIR_FstClusLO;        // First cluster - must be 0
+    u16 LDIR_Name3[2];         // Characters 12-13 of LFN
 } __attribute__((packed));
 
-// Structure to store information about recovered files
+// Constants for FAT32 file system
+#define BMP_SIGNATURE 0x4D42   // "BM" in little endian
+#define DELETED_FLAG 0xE5      // First byte of deleted file name
+#define LFN_LAST_ENTRY 0x40    // Flag for last entry in LFN sequence
+
+// Cluster categories
+enum ClusterType {
+    CLUSTER_UNUSED,
+    CLUSTER_DIR_ENTRY,
+    CLUSTER_BMP_HEADER,
+    CLUSTER_BMP_DATA
+};
+
+// Recovered file information
 typedef struct {
     char filename[256];
-    u32 firstCluster;
-    u32 fileSize;
-    u8 *data;
-    bool recovered;
+    uint32_t startCluster;
+    uint32_t fileSize;
+    bool valid;
+    uint32_t *clusters;
+    uint32_t clusterCount;
 } RecoveredFile;
 
-// Array to store recovered files
-#define MAX_FILES 1024
-RecoveredFile recoveredFiles[MAX_FILES];
-int numRecoveredFiles = 0;
-
-// Array to track if a cluster has been assigned to a file
-bool clusterAssigned[MAX_CLUS] = {false};
-
-// Function to check if a cluster contains BMP header
-bool is_bmp_header(void *cluster_data) {
-    u8 *data = (u8*)cluster_data;
-    return (data[0] == 'B' && data[1] == 'M');
-}
-
-// Scan root directory only, collect cluster->filename mapping
-void scan_root_dir_and_collect_names(u32 clusId) {
-    void *cluster_data = cluster_to_sec(clusId);
-    if (!cluster_data) return;
-    struct fat32dent *dents = (struct fat32dent *)cluster_data;
-    int num_entries = (hdr->BPB_SecPerClus * hdr->BPB_BytsPerSec) / sizeof(struct fat32dent);
-    for (int i = 0; i < num_entries; i++) {
-        struct fat32dent *dent = &dents[i];
-        if (dent->DIR_Name[0] == 0) break;
-        if (dent->DIR_Name[0] == 0xE5) continue;
-        if (dent->DIR_Attr == ATTR_VOLUME_ID || (dent->DIR_Attr & ATTR_LONG_NAME) == ATTR_LONG_NAME) continue;
-        char filename[13];
-        get_filename(dent, filename);
-        u32 firstCluster = (((u32)dent->DIR_FstClusHI) << 16) | dent->DIR_FstClusLO;
-        if (firstCluster >= 2 && firstCluster < MAX_CLUS) {
-            clus_to_name[firstCluster] = strdup(filename);
-        }
-    }
-}
-
-// Function to scan for directory entries
-void scan_for_dir_entries() {
-    u32 total_clusters = (hdr->BPB_TotSec32 - (hdr->BPB_RsvdSecCnt + hdr->BPB_NumFATs * hdr->BPB_FATSz32)) / hdr->BPB_SecPerClus;
-    
-    for (u32 clus = 2; clus < total_clusters + 2; clus++) {
-        void *cluster_data = cluster_to_sec(clus);
-        if (!cluster_data) continue;
-        
-        // Check if this looks like a directory cluster (contains directory entries)
-        struct fat32dent *dents = (struct fat32dent *)cluster_data;
-        int num_entries = (hdr->BPB_SecPerClus * hdr->BPB_BytsPerSec) / sizeof(struct fat32dent);
-        
-        for (int i = 0; i < num_entries; i++) {
-            struct fat32dent *dent = &dents[i];
-            
-            // If we find a deleted directory entry (.bmp file)
-            if (dent->DIR_Name[0] == 0xE5) {
-                // Check if it's likely a BMP file
-                bool is_likely_bmp = false;
-                // Check file extension (BMP)
-                if (dent->DIR_Name[8] == 'B' && dent->DIR_Name[9] == 'M' && dent->DIR_Name[10] == 'P') {
-                    is_likely_bmp = true;
-                }
-                
-                if (is_likely_bmp) {
-                    u32 firstCluster = (((u32)dent->DIR_FstClusHI) << 16) | dent->DIR_FstClusLO;
-                    u32 fileSize = dent->DIR_FileSize;
-                    
-                    // Verify the cluster range is valid
-                    if (firstCluster >= 2 && firstCluster < MAX_CLUS) {
-                        // Recover original filename
-                        char filename[256] = {0};
-                        
-                        // Handle deleted short name entry
-                        char shortName[13] = {0};
-                        shortName[0] = '_'; // Replace the first character (which was 0xE5)
-                        for (int j = 1; j < 8; j++) {
-                            if (dent->DIR_Name[j] == ' ') break;
-                            shortName[j] = dent->DIR_Name[j];
-                        }
-                        int len = strlen(shortName);
-                        if (dent->DIR_Name[8] != ' ') {
-                            shortName[len++] = '.';
-                            for (int j = 8; j < 11; j++) {
-                                if (dent->DIR_Name[j] == ' ') break;
-                                shortName[len++] = dent->DIR_Name[j];
-                            }
-                        }
-                        shortName[len] = '\0';
-                        
-                        // Check if we have long filename entries before this entry
-                        bool has_long_name = false;
-                        char longName[256] = {0};
-                        
-                        // Look backward for long name entries
-                        if (i > 0) {
-                            int longIndex = i - 1;
-                            struct fat32longent *longDent = (struct fat32longent *)&dents[longIndex];
-                            
-                            // Check if it's a long name entry (attr == 0x0F)
-                            if (longDent->LDIR_Attr == ATTR_LONG_NAME) {
-                                has_long_name = true;
-                                int nameIndex = 0;
-                                
-                                // Process the long name entries in reverse order
-                                while (longIndex >= 0 && nameIndex < 255) {
-                                    longDent = (struct fat32longent *)&dents[longIndex];
-                                    if (longDent->LDIR_Attr != ATTR_LONG_NAME) break;
-                                    
-                                    // Extract unicode characters from the entry
-                                    for (int k = 0; k < 5 && nameIndex < 255; k++) {
-                                        char c = longDent->LDIR_Name1[k] & 0xFF;
-                                        if (c == 0 || c == 0xFF) break;
-                                        longName[nameIndex++] = c;
-                                    }
-                                    
-                                    for (int k = 0; k < 6 && nameIndex < 255; k++) {
-                                        char c = longDent->LDIR_Name2[k] & 0xFF;
-                                        if (c == 0 || c == 0xFF) break;
-                                        longName[nameIndex++] = c;
-                                    }
-                                    
-                                    for (int k = 0; k < 2 && nameIndex < 255; k++) {
-                                        char c = longDent->LDIR_Name3[k] & 0xFF;
-                                        if (c == 0 || c == 0xFF) break;
-                                        longName[nameIndex++] = c;
-                                    }
-                                    
-                                    longIndex--;
-                                }
-                                longName[nameIndex] = '\0';
-                                
-                                // Reverse the string if needed
-                                if (strlen(longName) > 0) {
-                                    strcpy(filename, longName);
-                                }
-                            }
-                        }
-                        
-                        // Use short name if no long name found
-                        if (!has_long_name) {
-                            strcpy(filename, shortName);
-                        }
-                        
-                        // Ensure filename ends with .bmp
-                        if (strlen(filename) < 4 || strcasecmp(filename + strlen(filename) - 4, ".bmp") != 0) {
-                            strcat(filename, ".bmp");
-                        }
-                        
-                        // Only add printable ASCII characters to filename
-                        for (int j = 0; filename[j] != '\0'; j++) {
-                            if (filename[j] < 32 || filename[j] > 126) {
-                                filename[j] = '_';
-                            }
-                        }
-                        
-                        // Add to recovered files
-                        if (numRecoveredFiles < MAX_FILES && fileSize > 0) {
-                            strcpy(recoveredFiles[numRecoveredFiles].filename, filename);
-                            recoveredFiles[numRecoveredFiles].firstCluster = firstCluster;
-                            recoveredFiles[numRecoveredFiles].fileSize = fileSize;
-                            recoveredFiles[numRecoveredFiles].data = NULL;
-                            recoveredFiles[numRecoveredFiles].recovered = false;
-                            numRecoveredFiles++;
-                            
-                            // Also update cluster->filename mapping
-                            if (clus_to_name[firstCluster] == NULL) {
-                                clus_to_name[firstCluster] = strdup(filename);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Function to recover a file by its first cluster
-void recover_file(RecoveredFile *file) {
-    // Verify the first cluster contains a BMP header
-    void *first_cluster_data = cluster_to_sec(file->firstCluster);
-    if (!first_cluster_data || !is_bmp_header(first_cluster_data)) {
-        return;
-    }
-    
-    // Calculate how many clusters we need
-    u32 cluster_size = hdr->BPB_SecPerClus * hdr->BPB_BytsPerSec;
-    u32 clusters_needed = (file->fileSize + cluster_size - 1) / cluster_size;
-    
-    // Allocate memory for the file data
-    file->data = (u8*)malloc(file->fileSize);
-    if (!file->data) {
-        return;
-    }
-    
-    // Copy the first cluster
-    memcpy(file->data, first_cluster_data, cluster_size < file->fileSize ? cluster_size : file->fileSize);
-    clusterAssigned[file->firstCluster] = true;
-    
-    // Copy remaining clusters (assuming they are contiguous)
-    u32 remaining_size = file->fileSize > cluster_size ? file->fileSize - cluster_size : 0;
-    u32 current_cluster = file->firstCluster + 1;
-    u32 offset = cluster_size;
-    
-    while (remaining_size > 0 && current_cluster < MAX_CLUS) {
-        void *cluster_data = cluster_to_sec(current_cluster);
-        if (!cluster_data) break;
-        
-        u32 copy_size = cluster_size < remaining_size ? cluster_size : remaining_size;
-        memcpy(file->data + offset, cluster_data, copy_size);
-        clusterAssigned[current_cluster] = true;
-        
-        remaining_size -= copy_size;
-        offset += copy_size;
-        current_cluster++;
-    }
-    
-    // Mark as recovered if we got all the data
-    if (remaining_size == 0) {
-        file->recovered = true;
-    } else {
-        free(file->data);
-        file->data = NULL;
-    }
-}
-
-// Function to scan for BMP headers directly
-void scan_for_bmp_headers() {
-    u32 total_clusters = (hdr->BPB_TotSec32 - (hdr->BPB_RsvdSecCnt + hdr->BPB_NumFATs * hdr->BPB_FATSz32)) / hdr->BPB_SecPerClus;
-    u32 cluster_size = hdr->BPB_SecPerClus * hdr->BPB_BytsPerSec;
-    
-    for (u32 clus = 2; clus < total_clusters + 2; clus++) {
-        // Skip if already assigned to a file
-        if (clusterAssigned[clus]) continue;
-        
-        void *cluster_data = cluster_to_sec(clus);
-        if (!cluster_data) continue;
-        
-        // Check for BMP header
-        if (is_bmp_header(cluster_data)) {
-            BMPHeader *bmpHeader = (BMPHeader*)cluster_data;
-            u32 fileSize = bmpHeader->fileSize;
-            
-            // Verify it's a reasonable size and within the filesystem limits
-            if (fileSize > 0 && fileSize < 100 * 1024 * 1024) { // Max 100MB to be safe
-                char filename[256];
-                
-                // Generate a filename if we don't have one for this cluster
-                if (clus_to_name[clus]) {
-                    strcpy(filename, clus_to_name[clus]);
-                } else {
-                    sprintf(filename, "recovered_bmp_%u.bmp", clus);
-                }
-                
-                // Add to recovered files
-                if (numRecoveredFiles < MAX_FILES) {
-                    strcpy(recoveredFiles[numRecoveredFiles].filename, filename);
-                    recoveredFiles[numRecoveredFiles].firstCluster = clus;
-                    recoveredFiles[numRecoveredFiles].fileSize = fileSize;
-                    recoveredFiles[numRecoveredFiles].data = NULL;
-                    recoveredFiles[numRecoveredFiles].recovered = false;
-                    numRecoveredFiles++;
-                }
-            }
-        }
-    }
-}
-
-// Function to write data to a temporary file and get SHA1
-void compute_sha1(RecoveredFile *file) {
-    if (!file->recovered || !file->data) return;
-    
-    // Create a temporary file
-    char tmpfilename[128];
-    sprintf(tmpfilename, "/tmp/fsrecov_tmp_%u", file->firstCluster);
-    FILE *tmp = fopen(tmpfilename, "wb");
-    if (!tmp) return;
-    
-    // Write the data
-    fwrite(file->data, 1, file->fileSize, tmp);
-    fclose(tmp);
-    
-    // Run sha1sum
-    char command[256];
-    sprintf(command, "sha1sum %s", tmpfilename);
-    FILE *fp = popen(command, "r");
-    if (!fp) {
-        unlink(tmpfilename);
-        return;
-    }
-    
-    // Read the output
-    char sha1[45] = {0}; // SHA1 is 40 chars + space
-    if (fscanf(fp, "%s", sha1) == 1) {
-        printf("%s  %s\n", sha1, file->filename);
-        fflush(stdout); // Flush after each output to ensure visibility even if program times out
-    }
-    
-    pclose(fp);
-    unlink(tmpfilename); // Clean up
-}
+// Function prototypes
+int is_bmp_header(const void *data);
+bool is_valid_filename_char(unsigned char c);
+int is_directory_cluster(const void *data, size_t size);
+char *extract_long_filename(const struct fat32_lfn_entry *lfn_entries, int count);
+void recover_file_data(uint32_t startCluster, uint32_t fileSize, uint8_t *disk, 
+                      uint32_t clusterSize, uint32_t dataStartSector, uint32_t bytesPerSector,
+                      RecoveredFile *file);
+void calculate_sha1(RecoveredFile *file, uint8_t *disk, uint32_t clusterSize,
+                   uint32_t dataStartSector, uint32_t bytesPerSector);
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s fs-image\n", argv[0]);
         exit(1);
     }
+
     setbuf(stdout, NULL);
+
     assert(sizeof(struct fat32hdr) == 512); // defensive
-    hdr = map_disk(argv[1]);
 
-    // 1. Collect root directory file names (no recursion)
-    scan_root_dir_and_collect_names(hdr->BPB_RootClus);
+    // map disk image to memory
+    struct fat32hdr *hdr = map_disk(argv[1]);
 
-    // 2. Scan for directory entries throughout the filesystem
-    scan_for_dir_entries();
+    // Calculate FAT32 file system parameters
+    uint32_t bytesPerSector = hdr->BPB_BytsPerSec;
+    uint32_t sectorsPerCluster = hdr->BPB_SecPerClus;
+    uint32_t clusterSize = bytesPerSector * sectorsPerCluster;
+    uint32_t reservedSectors = hdr->BPB_RsvdSecCnt;
+    uint32_t numFATs = hdr->BPB_NumFATs;
+    uint32_t FATSize = hdr->BPB_FATSz32;
+
+    // Calculate starting sector of data area (after reserved sectors and FATs)
+    uint32_t dataStartSector = reservedSectors + (numFATs * FATSize);
     
-    // 3. Scan for BMP headers directly (as backup)
-    scan_for_bmp_headers();
+    // Calculate total number of clusters
+    uint32_t totalSectors = hdr->BPB_TotSec32;
+    uint32_t dataSectors = totalSectors - dataStartSector;
+    uint32_t totalClusters = dataSectors / sectorsPerCluster;
     
-    // 4. Recover and process each file
-    for (int i = 0; i < numRecoveredFiles; i++) {
-        recover_file(&recoveredFiles[i]);
+    uint8_t *disk = (uint8_t *)hdr;
+    
+    // Array to store cluster types
+    enum ClusterType *clusterTypes = (enum ClusterType *)calloc(totalClusters + 2, sizeof(enum ClusterType));
+    if (!clusterTypes) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(1);
+    }
+    
+    // Step 1: Scan all clusters to categorize them
+    for (uint32_t cluster = 2; cluster < totalClusters + 2; cluster++) {
+        uint32_t clusterOffset = (dataStartSector * bytesPerSector) + ((cluster - 2) * clusterSize);
+        void *clusterData = disk + clusterOffset;
         
-        if (recoveredFiles[i].recovered) {
-            compute_sha1(&recoveredFiles[i]);
-            // Free memory
-            free(recoveredFiles[i].data);
-            recoveredFiles[i].data = NULL;
+        // Check if cluster contains BMP header
+        if (is_bmp_header(clusterData)) {
+            clusterTypes[cluster] = CLUSTER_BMP_HEADER;
+        }
+        // Check if cluster contains directory entries
+        else if (is_directory_cluster(clusterData, clusterSize)) {
+            clusterTypes[cluster] = CLUSTER_DIR_ENTRY;
+        }
+        // Check if cluster contains BMP data
+        else if (is_bmp_header(clusterData, clusterSize)) {
+            clusterTypes[cluster] = CLUSTER_BMP_DATA;
+        }
+        // Default to unused
+        else {
+            clusterTypes[cluster] = CLUSTER_UNUSED;
         }
     }
     
-    munmap(hdr, hdr->BPB_TotSec32 * hdr->BPB_BytsPerSec);
-    // Free allocated names
-    for (int i = 0; i < MAX_CLUS; i++) {
-        if (clus_to_name[i]) {
-            free(clus_to_name[i]);
+    // Step 2: Scan directory clusters to extract filenames and recover files
+    int recoveredFileCount = 0;
+    
+    for (uint32_t cluster = 2; cluster < totalClusters + 2; cluster++) {
+        if (clusterTypes[cluster] == CLUSTER_DIR_ENTRY) {
+            uint32_t clusterOffset = (dataStartSector * bytesPerSector) + ((cluster - 2) * clusterSize);
+            struct fat32dent *entries = (struct fat32dent *)(disk + clusterOffset);
+            int entriesPerCluster = clusterSize / sizeof(struct fat32dent);
+            
+            // Find LFN entries and their corresponding 8.3 entries
+            for (int i = 0; i < entriesPerCluster; i++) {
+                // Skip deleted or empty entries
+                if (entries[i].DIR_Name[0] == 0) {
+                    continue;
+                }
+                
+                // Check if this is a normal file entry (possibly preceded by LFN entries)
+                if (entries[i].DIR_Attr != ATTR_LONG_NAME && 
+                    !(entries[i].DIR_Attr & ATTR_DIRECTORY) &&
+                    !(entries[i].DIR_Attr & ATTR_VOLUME_ID)) {
+                    
+                    // Check if filename ends with .BMP (case insensitive)
+                    char shortName[13];
+                    int j;
+                    for (j = 0; j < 8 && entries[i].DIR_Name[j] != ' '; j++) {
+                        shortName[j] = entries[i].DIR_Name[j];
+                    }
+                    shortName[j++] = '.';
+                    for (int k = 0; k < 3 && entries[i].DIR_Name[8 + k] != ' '; k++, j++) {
+                        shortName[j] = entries[i].DIR_Name[8 + k];
+                    }
+                    shortName[j] = '\0';
+                    
+                    // Look for long filename entries that precede this entry
+                    int lfnCount = 0;
+                    struct fat32_lfn_entry lfnEntries[20]; // Support up to 20 LFN entries
+                    
+                    int idx = i - 1;
+                    while (idx >= 0 && lfnCount < 20 && 
+                           entries[idx].DIR_Attr == ATTR_LONG_NAME) {
+                        memcpy(&lfnEntries[lfnCount++], &entries[idx], sizeof(struct fat32dent));
+                        idx--;
+                    }
+                    
+                    char *filename;
+                    if (lfnCount > 0) {
+                        filename = extract_long_filename(lfnEntries, lfnCount);
+                        if (!filename) {
+                            // Fallback to short name if LFN extraction fails
+                            filename = strdup(shortName);
+                        }
+                    } else {
+                        filename = strdup(shortName);
+                    }
+                    
+                    if (filename) {
+                        // Check if it's a .BMP file (case insensitive)
+                        int len = strlen(filename);
+                        if (len > 4 && 
+                            (strcasecmp(filename + len - 4, ".bmp") == 0)) {
+                            
+                            // Get start cluster and file size
+                            uint32_t startCluster = 
+                                ((uint32_t)entries[i].DIR_FstClusHI << 16) | 
+                                entries[i].DIR_FstClusLO;
+                            uint32_t fileSize = entries[i].DIR_FileSize;
+                            
+                            // Skip files with invalid clusters or sizes
+                            if (startCluster < 2 || startCluster >= totalClusters + 2 || fileSize == 0) {
+                                free(filename);
+                                continue;
+                            }
+                            
+                            // Check if the start cluster is actually a BMP header
+                            if (clusterTypes[startCluster] != CLUSTER_BMP_HEADER) {
+                                free(filename);
+                                continue;
+                            }
+                            
+                            // Process file immediately, possibly in a child process
+                            // Use fork() to parallelize processing for better performance
+                            pid_t pid = fork();
+                            
+                            if (pid == 0) {
+                                // Child process - process the file and exit
+                                RecoveredFile file;
+                                strncpy(file.filename, filename, 255);
+                                file.filename[255] = '\0';
+                                file.startCluster = startCluster;
+                                file.fileSize = fileSize;
+                                file.valid = false;
+                                file.clusters = NULL;
+                                
+                                recover_file_data(startCluster, fileSize, disk, clusterSize, 
+                                                dataStartSector, bytesPerSector, &file);
+                                
+                                if (file.valid) {
+                                    calculate_sha1(&file, disk, clusterSize, 
+                                                dataStartSector, bytesPerSector);
+                                }
+                                
+                                if (file.clusters) {
+                                    free(file.clusters);
+                                }
+                                
+                                // Child process exits after processing
+                                exit(0);
+                            } else if (pid > 0) {
+                                // Parent process - keep track of child for cleanup
+                                recoveredFileCount++;
+                                
+                                // Don't let too many child processes run at once
+                                // Reap any completed child processes
+                                if (recoveredFileCount % 8 == 0) {
+                                    while (waitpid(-1, NULL, WNOHANG) > 0);
+                                }
+                            } else {
+                                // Fork failed
+                                fprintf(stderr, "Fork failed\n");
+                            }
+                            free(filename);
+                        } else {
+                            free(filename);
+                        }
+                    }
+                }
+            }
         }
     }
-    return 0;
+    
+    // Wait for all child processes to complete
+    while (wait(NULL) > 0);
+    
+    // Cleanup
+    free(clusterTypes);
+    
+    // file system traversal
+    munmap(hdr, hdr->BPB_TotSec32 * hdr->BPB_BytsPerSec);
 }
 
 void *map_disk(const char *fname) {
@@ -418,14 +310,6 @@ void *map_disk(const char *fname) {
         fprintf(stderr, "%s: Not a FAT file image\n", fname);
         goto release;
     }
-
-    printf("%s: DOS/MBR boot sector, ", fname);
-    printf("OEM-ID \"%s\", ", hdr->BS_OEMName);
-    printf("sectors/cluster %d, ", hdr->BPB_SecPerClus);
-    printf("sectors %d, ", hdr->BPB_TotSec32);
-    printf("sectors/FAT %d, ", hdr->BPB_FATSz32);
-    printf("serial number 0x%x\n", hdr->BS_VolID);
-
     return hdr;
 
 release:
@@ -435,33 +319,290 @@ release:
     exit(1);
 }
 
-u32 next_cluster(int n) {
-    // RTFM: Sec 4.1
-
-    u32 off = hdr->BPB_RsvdSecCnt * hdr->BPB_BytsPerSec;
-    u32 *fat = (u32 *)((u8 *)hdr + off);
-    return fat[n];
-}
-
-void *cluster_to_sec(int n) {
-    // RTFM: Sec 3.5 and 4 (TRICKY)
-    // Don't copy code. Write your own.
-
-    u32 DataSec = hdr->BPB_RsvdSecCnt + hdr->BPB_NumFATs * hdr->BPB_FATSz32;
-    DataSec += (n - 2) * hdr->BPB_SecPerClus;
-    return ((char *)hdr) + DataSec * hdr->BPB_BytsPerSec;
-}
-
-void get_filename(struct fat32dent *dent, char *buf) {
-    // RTFM: Sec 6.1
-
-    int len = 0;
-    for (int i = 0; i < sizeof(dent->DIR_Name); i++) {
-        if (dent->DIR_Name[i] != ' ') {
-            if (i == 8)
-                buf[len++] = '.';
-            buf[len++] = dent->DIR_Name[i];
+// Check if a block of data is a BMP file header
+int is_bmp_header(const void *data) {
+    // Check for BMP signature "BM"
+    if (*(uint16_t*)data == BMP_SIGNATURE) {
+        // Additional validation can be done by checking other BMP header fields
+        const BMPHeader *header = (const BMPHeader*)data;
+        const BMPInfoHeader *infoHeader = (const BMPInfoHeader*)(data + 14);
+        
+        // Reasonable checks for valid BMP files
+        if (header->dataOffset >= 54 && 
+            infoHeader->headerSize >= 40 && 
+            infoHeader->bitsPerPixel == 24 &&  // We know all BMPs are 24-bit
+            infoHeader->width > 0 && infoHeader->width < 10000 && 
+            infoHeader->height > 0 && infoHeader->height < 10000) {
+            return 1;
         }
     }
-    buf[len] = '\0';
+    return 0;
+}
+
+// Check if a given char is valid for a filename (printable ASCII)
+bool is_valid_filename_char(unsigned char c) {
+    // Printable ASCII chars excluding control chars, spaces, and special chars
+    return (c >= 0x21 && c <= 0x7E) || c == 0x20;
+}
+
+// Check if a cluster likely contains directory entries
+int is_directory_cluster(const void *data, size_t size) {
+    const struct fat32dent *entries = (const struct fat32dent *)data;
+    int valid_entries = 0;
+    int invalid_entries = 0;
+    
+    // Check multiple directory entries in the cluster
+    for (size_t i = 0; i < size / sizeof(struct fat32dent); i++) {
+        // Skip deleted entries
+        if (entries[i].DIR_Name[0] == DELETED_FLAG || entries[i].DIR_Name[0] == 0) {
+            continue;
+        }
+        
+        // Check for long filename attribute or if it's a regular file or directory
+        if (entries[i].DIR_Attr == ATTR_LONG_NAME || 
+            entries[i].DIR_Attr == ATTR_ARCHIVE || 
+            entries[i].DIR_Attr == ATTR_DIRECTORY) {
+            
+            // For long filename entries, check if it's well-formed
+            if (entries[i].DIR_Attr == ATTR_LONG_NAME) {
+                const struct fat32_lfn_entry *lfn = (const struct fat32_lfn_entry *)&entries[i];
+                
+                // LFN has some constraints we can check
+                if (lfn->LDIR_Type == 0 && lfn->LDIR_FstClusLO == 0) {
+                    // Check if characters in the name seem valid
+                    int valid_chars = 0;
+                    for (int j = 0; j < 5; j++) {
+                        uint16_t c = lfn->LDIR_Name1[j];
+                        if (c != 0xFFFF && (c == 0 || is_valid_filename_char(c & 0xFF))) {
+                            valid_chars++;
+                        }
+                    }
+                    if (valid_chars > 0) {
+                        valid_entries++;
+                    } else {
+                        invalid_entries++;
+                    }
+                } else {
+                    invalid_entries++;
+                }
+            } else {
+                // Check if the first character of the filename is valid
+                if (is_valid_filename_char(entries[i].DIR_Name[0])) {
+                    valid_entries++;
+                } else {
+                    invalid_entries++;
+                }
+            }
+        } else {
+            // Unknown attribute
+            invalid_entries++;
+        }
+    }
+    
+    // If we have more valid than invalid entries, consider it a directory cluster
+    return (valid_entries > 0 && valid_entries > invalid_entries) ? 1 : 0;
+}
+
+// Helper function to extract long filename from a sequence of LFN entries
+char *extract_long_filename(const struct fat32_lfn_entry *lfn_entries, int count) {
+    char *filename = (char *)calloc(256, 1); // Max filename length
+    if (!filename) return NULL;
+    
+    int pos = 0;
+    
+    // Process LFN entries in reverse order (the way they are stored)
+    for (int i = count - 1; i >= 0; i--) {
+        const struct fat32_lfn_entry *lfn = &lfn_entries[i];
+        
+        // Extract characters from Name1
+        for (int j = 0; j < 5; j++) {
+            uint16_t c = lfn->LDIR_Name1[j];
+            if (c == 0 || c == 0xFFFF) break;
+            filename[pos++] = c & 0xFF; // Just take the lower byte (ASCII)
+        }
+        
+        // Extract characters from Name2
+        for (int j = 0; j < 6; j++) {
+            uint16_t c = lfn->LDIR_Name2[j];
+            if (c == 0 || c == 0xFFFF) break;
+            filename[pos++] = c & 0xFF;
+        }
+        
+        // Extract characters from Name3
+        for (int j = 0; j < 2; j++) {
+            uint16_t c = lfn->LDIR_Name3[j];
+            if (c == 0 || c == 0xFFFF) break;
+            filename[pos++] = c & 0xFF;
+        }
+    }
+    
+    filename[pos] = '\0';
+    return filename;
+}
+
+// Check if a cluster contains BMP image data (optimized for 24-bit BMPs)
+int is_bmp_data(const void *data, size_t size) {
+    const uint8_t *bytes = (const uint8_t *)data;
+    
+    // Look for patterns common in 24-bit BMP data
+    // In 24-bit BMP files, each pixel takes 3 bytes (BGR order)
+    // Check for reasonable color values and patterns
+    
+    // Count smooth color transitions (adjacent pixels with similar colors)
+    int smooth_transitions = 0;
+    for (size_t i = 0; i < size - 6; i += 3) {
+        int r1 = bytes[i + 2];
+        int g1 = bytes[i + 1];
+        int b1 = bytes[i];
+        
+        int r2 = bytes[i + 5];
+        int g2 = bytes[i + 4];
+        int b2 = bytes[i + 3];
+        
+        // Calculate color difference between adjacent pixels
+        int diff = abs(r1 - r2) + abs(g1 - g2) + abs(b1 - b2);
+        
+        // If the difference is within a threshold, consider it a smooth transition
+        if (diff < 100) {
+            smooth_transitions++;
+        }
+    }
+    
+    // If more than 40% of transitions are smooth, it's likely image data
+    return (smooth_transitions > (size / 15)); 
+}
+
+// Recover file data starting from a given cluster
+void recover_file_data(uint32_t startCluster, uint32_t fileSize, uint8_t *disk, 
+                      uint32_t clusterSize, uint32_t dataStartSector, uint32_t bytesPerSector,
+                      RecoveredFile *file) {
+    // Calculate how many clusters are needed for this file
+    uint32_t clustersNeeded = (fileSize + clusterSize - 1) / clusterSize;
+    
+    // Allocate memory for cluster list
+    file->clusters = (uint32_t *)malloc(clustersNeeded * sizeof(uint32_t));
+    if (!file->clusters) {
+        file->valid = false;
+        return;
+    }
+    
+    file->clusterCount = clustersNeeded;
+    file->clusters[0] = startCluster;
+    
+    // First try contiguous clusters (most common case)
+    bool contiguous = true;
+    for (uint32_t i = 1; i < clustersNeeded; i++) {
+        uint32_t nextCluster = startCluster + i;
+        uint32_t clusterOffset = (dataStartSector * bytesPerSector) + ((nextCluster - 2) * clusterSize);
+        
+        // Verify this is either a BMP data cluster or the right type of cluster for this position
+        if (i == 0) {
+            // First cluster should be a BMP header
+            if (!is_bmp_header(disk + clusterOffset)) {
+                contiguous = false;
+                break;
+            }
+        } else {
+            // Subsequent clusters should be BMP data
+            if (!is_bmp_data(disk + clusterOffset, clusterSize)) {
+                contiguous = false;
+                break;
+            }
+        }
+        
+        file->clusters[i] = nextCluster;
+    }
+    
+    // If clusters aren't contiguous, try a more sophisticated approach
+    if (!contiguous && clustersNeeded > 1) {
+        // Reset and try a search based on BMP data signature
+        file->clusters[0] = startCluster;
+        uint32_t currentCluster = startCluster;
+        uint32_t remainingClusters = clustersNeeded - 1;
+        uint32_t currentIndex = 0;
+        
+        // Scan nearby clusters for BMP data that might belong to this file
+        const int SEARCH_RANGE = 100; // Number of clusters to search ahead
+        while (remainingClusters > 0 && currentIndex < clustersNeeded) {
+            bool found = false;
+            
+            // Try to find the next cluster
+            for (uint32_t offset = 1; offset <= SEARCH_RANGE && !found; offset++) {
+                uint32_t candidateCluster = currentCluster + offset;
+                uint32_t clusterOffset = (dataStartSector * bytesPerSector) + 
+                                      ((candidateCluster - 2) * clusterSize);
+                
+                // Check if this cluster contains BMP data
+                if (is_bmp_data(disk + clusterOffset, clusterSize)) {
+                    currentIndex++;
+                    file->clusters[currentIndex] = candidateCluster;
+                    currentCluster = candidateCluster;
+                    remainingClusters--;
+                    found = true;
+                }
+            }
+            
+            // If we couldn't find a next cluster, give up
+            if (!found) {
+                // Fall back to contiguous allocation for remaining clusters
+                for (uint32_t i = currentIndex + 1; i < clustersNeeded; i++) {
+                    file->clusters[i] = file->clusters[currentIndex] + (i - currentIndex);
+                }
+                break;
+            }
+        }
+    }
+    
+    file->valid = true;
+}
+
+// Write recovered file to temp file and calculate its SHA1
+void calculate_sha1(RecoveredFile *file, uint8_t *disk, uint32_t clusterSize,
+                   uint32_t dataStartSector, uint32_t bytesPerSector) {
+    if (!file->valid || !file->clusters) {
+        return;
+    }
+    
+    char tempFileName[64];
+    snprintf(tempFileName, sizeof(tempFileName), "/tmp/fsrecov_temp_%u", file->startCluster);
+    
+    FILE *fp = fopen(tempFileName, "wb");
+    if (!fp) {
+        perror("Failed to create temp file");
+        return;
+    }
+    
+    // Write all clusters to the temp file
+    uint32_t remainingSize = file->fileSize;
+    
+    for (uint32_t i = 0; i < file->clusterCount && remainingSize > 0; i++) {
+        uint32_t cluster = file->clusters[i];
+        uint32_t clusterOffset = (dataStartSector * bytesPerSector) + 
+                               ((cluster - 2) * clusterSize); // Clusters start at 2
+        
+        uint32_t bytesToWrite = (remainingSize > clusterSize) ? clusterSize : remainingSize;
+        fwrite(disk + clusterOffset, 1, bytesToWrite, fp);
+        remainingSize -= bytesToWrite;
+    }
+    
+    fclose(fp);
+    
+    // Call sha1sum to calculate the checksum
+    char command[512];
+    snprintf(command, sizeof(command), "sha1sum %s", tempFileName);
+    
+    FILE *sha1Fp = popen(command, "r");
+    if (!sha1Fp) {
+        perror("Failed to run sha1sum");
+        unlink(tempFileName);
+        return;
+    }
+    
+    char sha1sum[41];
+    if (fscanf(sha1Fp, "%40s", sha1sum) == 1) {
+        printf("%s  %s\n", sha1sum, file->filename);
+    }
+    
+    pclose(sha1Fp);
+    unlink(tempFileName); // Delete temp file
 }

@@ -54,7 +54,6 @@ struct fat32dent {
 } __attribute__((packed));
 
 #define CLUS_INVALID   0xffffff7
-
 #define ATTR_READ_ONLY 0x01
 #define ATTR_HIDDEN    0x02
 #define ATTR_SYSTEM    0x04

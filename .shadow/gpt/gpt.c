@@ -8,6 +8,13 @@
 #include <time.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef OMP
+#include <omp.h>
+#endif
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #include "thread.h"
 #include "thread-sync.h"
@@ -23,6 +30,7 @@ void encoder_forward(float* out,
     // inp is (B,T) of integers, holding the token ids at each (b,t) position
     // wte is (V,C) of token embeddings, short for "weight token embeddings"
     // wpe is (maxT,C) of position embeddings, short for "weight positional embedding"
+    #pragma omp parallel for num_threads(4) collapse(2)
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             // seek to the output position in out[b,t,:]
@@ -50,6 +58,7 @@ void layernorm_forward(float* out, float* mean, float* rstd,
     // at each position (b,t) of the input, the C-dimensional vector
     // of activations gets normalized, then scaled and shifted
     float eps = 1e-5f;
+    #pragma omp parallel for num_threads(4) collapse(2)
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             // seek to the input position inp[b,t,:]
@@ -90,6 +99,7 @@ void matmul_forward(float* out,
     // OC is short for "output channels"
     // inp is (B,T,C), weight is (OC, C), bias is (OC)
     // out will be (B,T,OC)
+    #pragma omp parallel for num_threads(4) collapse(2)
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             float* out_bt = out + b * T * OC + t * OC;
@@ -119,7 +129,7 @@ void attention_forward(float* out, float* preatt, float* att,
     int C3 = C*3;
     int hs = C / NH; // head size
     float scale = 1.0 / sqrtf(hs);
-
+    #pragma omp parallel for num_threads(4) collapse(3)
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             for (int h = 0; h < NH; h++) {
@@ -184,6 +194,7 @@ void attention_forward(float* out, float* preatt, float* att,
 #define GELU_SCALING_FACTOR sqrtf(2.0f / M_PI)
 void gelu_forward(float* out, float* inp, int N) {
     // (approximate) GeLU elementwise non-linearity in the MLP block of Transformer
+    #pragma omp parallel for num_threads(4)
     for (int i = 0; i < N; i++) {
         float x = inp[i];
         float cube = 0.044715f * x * x * x;
@@ -192,6 +203,7 @@ void gelu_forward(float* out, float* inp, int N) {
 }
 
 void residual_forward(float* out, float* inp1, float* inp2, int N) {
+    #pragma omp parallel for num_threads(4)
     for (int i = 0; i < N; i++) {
         out[i] = inp1[i] + inp2[i];
     }
@@ -200,6 +212,7 @@ void residual_forward(float* out, float* inp1, float* inp2, int N) {
 void softmax_forward(float* probs, float* logits, int B, int T, int V) {
     // output: probs are (B,T,V) of the probabilities (sums to 1.0 in each b,t position)
     // input: logits is (B,T,V) of the unnormalized log probabilities
+    #pragma omp parallel for num_threads(4) collapse(2)
     for (int b = 0; b < B; b++) {
         for (int t = 0; t < T; t++) {
             // probs <- softmax(logits)
